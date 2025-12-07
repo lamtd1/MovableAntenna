@@ -45,6 +45,20 @@ class Config:
     # Custom parameters 
     beamforming_action_scaling = 0.15  # ~ 15%
 
+    # Thêm 4 tham số 
+    # Mobility Configuration
+    gm_alpha = 0.8  # Tham số alpha cho mobility
+    gm_mean_speed = 2.0  # [m/s]
+    # mean direction will be initialized per user or can be 0
+    # Steps
+    max_steps = 100 # Số bước tối đa
+    # Boundary
+    x_min, x_max = -100, 100   # Bounding box
+    y_min, y_max = -100, 100
+    
+    # Path Propagation
+    multipath_angle_spread = 5 * (np.pi/180) # 5 degrees spread
+
     def init_unstatic_value(self):
         self.Number_of_symbol = self.M_users + self.Number_of_target
         self.Number_of_com_components = self.Number_of_symbol

@@ -14,6 +14,12 @@ class User:
         - Channel vector
         - Data rate
         - SINR
+        
+        - Position (x, y)
+        - Speed (s)
+        - Direction (d)
+        - Mean Direction (d_mean)
+
     """
     distance = 0
     SINR = 0
@@ -21,14 +27,52 @@ class User:
     
     def __init__(self, antenna_array, configuration):
         self.cfg = configuration
-        self.distance = random.uniform(self.cfg.d_min, self.cfg.d_max)
-        self.angle_of_direction = np.random.uniform(low=0, high=np.pi, size=(self.cfg.l_path_propagation,))  # an array of L in (0~pi)
-        # !! raising problem with low data rate here where path gain sometime overflow distribution range
-        self.path_gain_peak = (self.cfg.d0_path_loss_ref * ((self.distance)**(-1*self.cfg.alpha_path_loss_exponent)) ) / self.cfg.l_path_propagation # similar to ref formular from [2]
-        self.path_gain = np.random.normal(loc=self.path_gain_peak/2, scale=self.path_gain_peak, size=self.cfg.l_path_propagation)  # Blm ~ path gain for the Lth transmit path
+        
+        # Initialize Mobility State (Gauss-Markov)
+        # Position uniformly distributed in the area
+        self.x = random.uniform(self.cfg.x_min, self.cfg.x_max)
+        self.y = random.uniform(self.cfg.y_min, self.cfg.y_max)
+        # Cập nhật tính lại distance
+        self.distance = np.sqrt(self.x**2 + self.y**2)
+
+        # Speed and Direction
+        self.speed = self.cfg.gm_mean_speed
+        self.mean_direction = np.random.uniform(0, 2*np.pi)
+        self.direction = self.mean_direction
+
+        # Multipath AoD = LOS + small perturbation
+        self.multipath_offset = np.random.normal(
+            loc=0, 
+            scale=self.cfg.multipath_angle_spread, 
+            size=self.cfg.l_path_propagation
+        )
+        self._update_path_propagation()
 
         self.channel_vector = np.zeros(self.cfg.N_antennaElement)
         self.update_attribute(antenna_array)
+
+    def _update_path_propagation(self):
+        # ---- AoD LOS according to geometry ----
+        los_angle = np.arctan2(self.y, self.x)
+
+        # Cập nhật lại angle_of_direction theo multipath_offset
+        self.angle_of_direction = los_angle + self.multipath_offset
+    
+        # ---- Path gain based on distance ----
+        # Recalculate Path Gain based on new distance
+        safe_dist = max(self.distance, 1.0)
+        # Tính toán lại path gain peak, safer with safe_dist
+        self.path_gain_peak = (self.cfg.d0_path_loss_ref * ((safe_dist)**(-1*self.cfg.alpha_path_loss_exponent)) ) / self.cfg.l_path_propagation
+        # Calculate path_gain as before
+        self.path_gain = np.random.normal(loc=self.path_gain_peak/2, scale=self.path_gain_peak, size=self.cfg.l_path_propagation)
+
+    # Update lại vị trí -> Update lại cả distance và path gain
+    def update_location(self, x, y):
+        self.x = x
+        self.y = y
+        self.distance = np.sqrt(x**2 + y**2)
+        # We need to update path gain because distance changed
+        self._update_path_propagation()
 
     """
     Update user's attribute as :
@@ -136,8 +180,14 @@ class Eva:
     EACH_users_data_rate = []
 
     def __init__(self, antenna_array, configuration):
+
         self.cfg = configuration
-        self.distance = random.uniform(self.cfg.d_min, self.cfg.d_max)
+        
+        # Position initialization - Tính lại biến distance
+        self.x = random.uniform(self.cfg.x_min, self.cfg.x_max)
+        self.y = random.uniform(self.cfg.y_min, self.cfg.y_max)
+        self.distance = np.sqrt(self.x**2 + self.y**2)
+        
         self.angle_of_direction = np.random.uniform(low=0, high=np.pi, size=(self.cfg.l_path_propagation,))
         self.path_gain_peak = (self.cfg.d0_path_loss_ref * (
                     (self.distance) ** (-1 * self.cfg.alpha_path_loss_exponent))) / self.cfg.l_path_propagation

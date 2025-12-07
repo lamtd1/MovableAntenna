@@ -86,6 +86,55 @@ class SecCom_Env(gym.Env):
         return observation, info
 
     def step(self, action):
+        
+        # Mobility Update (Gauss-Markov)
+        # ==========================================
+        for user in self.basestation.usrList:
+            # Lưu lại state t-1
+            prev_speed = user.speed
+            prev_direction = user.direction
+
+            # Random gaussian perturbation
+            s_r = np.random.normal(0, 1)
+            d_r = np.random.normal(0, 1)
+
+            alpha = self.cfg.gm_alpha
+            
+            # Update Speed
+            # sn,t = αn sn,t−1 + (1 − αn) ¯sn + sqrt(1 − αn^2) sr,n,t−1
+            user.speed = (alpha * prev_speed) + \
+                         ((1 - alpha) * self.cfg.gm_mean_speed) + \
+                         (np.sqrt(1 - alpha**2) * s_r)
+            
+            # Update Direction
+            # dn,t = αn dn,t−1 + (1 − αn) ¯dn + sqrt(1 − αn^2) dr,n,t−1
+            user.direction = (alpha * prev_direction) + \
+                             ((1 - alpha) * user.mean_direction) + \
+                             (np.sqrt(1 - alpha**2) * d_r)
+            
+            # Update Position
+            # xn,t = xn,t−1 + sn,t−1 * cos(dn,t−1)
+            # yn,t = yn,t−1 + sn,t−1 * sin(dn,t−1)
+            # Note: The paper says s_t-1 and d_t-1. Here we use the just updated values or previous ones?
+            # Usually strict implementation uses previous step values, but updating state first is also common.
+            # Let's use the 'current' speed/direction for the displacement to be simple, or keep strict.
+            # Given the formula x_t = x_{t-1} + s_{t-1}, it implies using the state from the START of the step.
+            # However, we just updated user.speed/direction to be s_t and d_t. 
+            # So s_{t-1} was the value BEFORE this update.
+            # But we overwrote it. For simplicity in simulation without keeping history variable:
+            # We can use the new speed/direction as the vector for this step. 
+            
+            new_x = user.x + prev_speed * np.cos(prev_direction)
+            new_y = user.y + prev_speed * np.sin(prev_direction)
+
+            # Boundary Check
+            new_x = np.clip(new_x, self.cfg.x_min, self.cfg.x_max)
+            new_y = np.clip(new_y, self.cfg.y_min, self.cfg.y_max)
+
+            user.update_location(new_x, new_y)
+            
+        # ==========================================
+
         # Processing actions
         # Extract antenna element position
         self.antenna_array = (action[:self.cfg.N_antennaElement] + 1)*self.cfg.MA_size*self.cfg.dlambda / 2
@@ -109,8 +158,13 @@ class SecCom_Env(gym.Env):
         else:
             reward = 0
 
-        # Terminate after 1 step ~ 1 step/episode
-        terminated = True
+        # Terminate after max_steps
+        # Update logic terminate, chỉ dừng sau max_steps
+        self.step_counter += 1
+        if self.step_counter >= self.cfg.max_steps:
+            terminated = True
+        else:
+            terminated = False
 
         # These parameters only for loggin purpose on tensorboard
         self.beam_power = np.trace(np.dot(self.beamforming_matrices, np.conj(self.beamforming_matrices).T))

@@ -34,7 +34,7 @@ def run_command(cmd_args):
 def user_number_changes():
     model = ['DDPG', 'PPO', 'A2C']
     users = [2,3,4,5]
-    total_timestep = 300000
+    total_timestep = 30000
     for mod in model:
         for i in range(len(users)):
             run_command(f'-m {mod} -Mu {users[i]} -t {total_timestep}')
@@ -57,7 +57,7 @@ def SINR_limit_changes():
             run_command(f'-m {mod} -Ms {dbm_to_watt(SINR[i])} -t {total_timestep}')
 
 def tx_power_change():
-    model = ['PPO']
+    model = ['PPO', 'A2C']
     power = [15,20,25,30]
     total_timestep = 300000
     for mod in model:
@@ -66,9 +66,10 @@ def tx_power_change():
 
 def run_all_drl_model():
     model = ['PPO']
-    total_timestep = 300000
-    for mod in model:
-        run_command(f'-m {mod} -t {total_timestep}')
+    total_timestep = 1_000_000
+    for i in range(5):
+        for mod in model:
+            run_command(f'-m {mod} -t {total_timestep}')
 
 
 parser = argparse.ArgumentParser()
