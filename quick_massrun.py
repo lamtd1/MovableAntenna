@@ -67,7 +67,7 @@ def tx_power_change():
 def run_all_drl_model():
     model = ['PPO']
     total_timestep = 1_000_000
-    for i in range(5):
+    for i in range(7):
         for mod in model:
             run_command(f'-m {mod} -t {total_timestep}')
 

@@ -3,6 +3,7 @@ import gymnasium as gym
 from stable_baselines3 import PPO, A2C, DDPG
 
 from stable_baselines3.common.env_util import make_vec_env
+from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.callbacks import EvalCallback, BaseCallback
 from stable_baselines3.common.noise import NormalActionNoise, OrnsteinUhlenbeckActionNoise
@@ -74,6 +75,12 @@ def run_model(model_name):
     log_dir = dir_tensorboard_logs + model_name + f"_{int(time.time())}" + model_custom_parameters
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
+    
+    # Wrap with DummyVecEnv and VecNormalize
+    env = DummyVecEnv([lambda: env])
+    # Thêm VecNormalize để normalize observation và reward ? Not sure work
+    env = VecNormalize(env, norm_obs=True, norm_reward=True, clip_obs=10.)
+    
     env.reset()
     model = A2C("MultiInputPolicy", env, verbose=1, tensorboard_log=log_dir, n_steps=5)
     match args.model:

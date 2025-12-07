@@ -14,7 +14,7 @@ class User:
         - Channel vector
         - Data rate
         - SINR
-        
+
         - Position (x, y)
         - Speed (s)
         - Direction (d)
@@ -29,7 +29,6 @@ class User:
         self.cfg = configuration
         
         # Initialize Mobility State (Gauss-Markov)
-        # Position uniformly distributed in the area
         self.x = random.uniform(self.cfg.x_min, self.cfg.x_max)
         self.y = random.uniform(self.cfg.y_min, self.cfg.y_max)
         # Cập nhật tính lại distance
@@ -52,18 +51,15 @@ class User:
         self.update_attribute(antenna_array)
 
     def _update_path_propagation(self):
-        # ---- AoD LOS according to geometry ----
         los_angle = np.arctan2(self.y, self.x)
 
-        # Cập nhật lại angle_of_direction theo multipath_offset
+        # Cập nhật lại angle_of_direction theo multipath_offset - Nhiễu này có thể gây ra vấn đề khi angle_of_direction vượt quá 2pi
         self.angle_of_direction = los_angle + self.multipath_offset
     
-        # ---- Path gain based on distance ----
-        # Recalculate Path Gain based on new distance
+        # Tính lại path-gain
         safe_dist = max(self.distance, 1.0)
-        # Tính toán lại path gain peak, safer with safe_dist
+        # Tính toán lại path gain peak, safe_dist tránh hiện tượng đứng vuông góc dứoi BS
         self.path_gain_peak = (self.cfg.d0_path_loss_ref * ((safe_dist)**(-1*self.cfg.alpha_path_loss_exponent)) ) / self.cfg.l_path_propagation
-        # Calculate path_gain as before
         self.path_gain = np.random.normal(loc=self.path_gain_peak/2, scale=self.path_gain_peak, size=self.cfg.l_path_propagation)
 
     # Update lại vị trí -> Update lại cả distance và path gain
@@ -71,7 +67,6 @@ class User:
         self.x = x
         self.y = y
         self.distance = np.sqrt(x**2 + y**2)
-        # We need to update path gain because distance changed
         self._update_path_propagation()
 
     """
