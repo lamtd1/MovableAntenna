@@ -51,7 +51,7 @@ class Config:
     gm_mean_speed = 2.0  # [m/s]
     # mean direction will be initialized per user or can be 0
     # Steps
-    max_steps = 100 # Số bước tối đa
+    max_steps = 300_000 # Số bước tối đa
     # Boundary
     x_min, x_max = -100, 100   # Bounding box
     y_min, y_max = -100, 100

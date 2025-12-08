@@ -1,4 +1,7 @@
 logs
 model
+!model/
 monitor_log
 __pycache__
+train_csv
+train_csv_2

@@ -171,18 +171,18 @@ class SecCom_Env(gym.Env):
         # Validate antenna element positions
         for i in range(len(self.antenna_array) - 1):
             if (self.antenna_array[i + 1] - self.antenna_array[i]) < self.cfg.D0_spacingAntenna:
-                print("check position")
+                # print("check position")
                 return False
             
         # Validate beamforming matries
         if (np.trace(np.dot(self.beamforming_matrices,
                             np.conj(self.beamforming_matrices).T)) >= self.cfg.P0_basestation_power):
-            print("check beam")
+            # print("check beam")
             return False
         
         # Validate sensing SINR 
         if not sensing_sinr >= self.cfg.sensing_SINR_min:
-            print("check SINR")
+            # print("check SINR")
             return False
         return True
 

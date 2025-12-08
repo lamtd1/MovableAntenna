@@ -76,10 +76,8 @@ def run_model(model_name):
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
     
-    # Wrap with DummyVecEnv and VecNormalize
+    # Wrap with DummyVecEnv
     env = DummyVecEnv([lambda: env])
-    # Thêm VecNormalize để normalize observation và reward ? Not sure work
-    env = VecNormalize(env, norm_obs=True, norm_reward=True, clip_obs=10.)
     
     env.reset()
     model = A2C("MultiInputPolicy", env, verbose=1, tensorboard_log=log_dir, n_steps=5)
@@ -87,11 +85,7 @@ def run_model(model_name):
         case 'PPO':
             model = PPO("MultiInputPolicy", env, verbose=1, tensorboard_log=log_dir, clip_range=0.4,
                         learning_rate=0.0007,
-                        gae_lambda=1, n_steps=1000)
-
-        # This case had been defined as default case
-        # case 'A2C':
-        #     model = A2C("MultiInputPolicy", env, verbose=1, tensorboard_log=log_dir, n_steps=5)
+                        gae_lambda=1, n_steps=1000) 
 
         case 'DDPG':
             n_actions = env.action_space.shape[-1]

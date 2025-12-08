@@ -28,7 +28,7 @@ class User:
     def __init__(self, antenna_array, configuration):
         self.cfg = configuration
         
-        # Initialize Mobility State (Gauss-Markov)
+        # (Gauss-Markov)
         self.x = random.uniform(self.cfg.x_min, self.cfg.x_max)
         self.y = random.uniform(self.cfg.y_min, self.cfg.y_max)
         # Cập nhật tính lại distance
@@ -47,7 +47,7 @@ class User:
         )
         self._update_path_propagation()
 
-        self.channel_vector = np.zeros(self.cfg.N_antennaElement)
+        
         self.update_attribute(antenna_array)
 
     def _update_path_propagation(self):
@@ -79,6 +79,7 @@ class User:
         self.field_response_vector = np.array(
             [np.exp(1j * (2 * np.pi / self.cfg.dlambda) * antenna_array * np.cos(angle)) for angle in self.angle_of_direction])
 
+        self.channel_vector = np.zeros(self.cfg.N_antennaElement)
         # Formular (4) Calculating channel vector h_m = sum of path gain B_m * field response vector a_m with j from all path propagation
         # This is a vector frv /times a number gain
         # Output equal to shape (antenna_element, 1)
@@ -188,7 +189,7 @@ class Eva:
                     (self.distance) ** (-1 * self.cfg.alpha_path_loss_exponent))) / self.cfg.l_path_propagation
         self.path_gain = np.random.normal(loc=self.path_gain_peak / 2, scale=self.path_gain_peak,
                                           size=self.cfg.l_path_propagation)  # Blm ~ path gain for the Lth transmit path
-        self.channel_vector = np.zeros(self.cfg.N_antennaElement)
+        
         self.update_attribute(antenna_array)
         self.EACH_users_SINR = []
         self.EACH_users_data_rate = []
@@ -207,6 +208,8 @@ class Eva:
         self.field_response_vector = np.array(
             [np.exp(1j * (2 * np.pi / self.cfg.dlambda) * antenna_array * np.cos(angle)) for angle in self.angle_of_direction])
 
+        self.channel_vector = np.zeros(self.cfg.N_antennaElement)
+        
         # Formular (4) Calculating channel vector h_m = sum of path gain B_m * field response vector a_m with j from all path propagation
         for frv, gain in zip(self.field_response_vector, self.path_gain):
             self.channel_vector = self.channel_vector + (frv * gain)
