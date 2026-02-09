@@ -15,11 +15,7 @@ def run_command(cmd_args):
     """
     Executes a command in a subprocess.
     """
-    # Construct the command list
-    # On Windows, 'start /wait' was used to open a new window and wait.
-    # On macOS/Linux, we just run the command directly in the current terminal.
-    # If we want to mimic 'start /wait', we just call it.
-    
+
     cmd_str = f"{python_dir} main.py {cmd_args}"
     print(f"Executing: {cmd_str}")
     
@@ -32,7 +28,7 @@ def run_command(cmd_args):
         sys.exit(1)
 
 def user_number_changes():
-    model = ['DDPG', 'PPO', 'A2C']
+    model = ['PPO']
     users = [2,3,4,5]
     total_timestep = 300000
     for mod in model:
@@ -40,7 +36,7 @@ def user_number_changes():
             run_command(f'-m {mod} -Mu {users[i]} -t {total_timestep}')
 
 def antenna_element_number_changes():
-    model = ['DDPG', 'PPO', 'A2C']
+    model = ['PPO']
     antenna = [2,4,8]
     total_timestep = 300000
     for mod in model:
@@ -49,7 +45,7 @@ def antenna_element_number_changes():
 
 def SINR_limit_changes():
     # model = ['DDPG', 'PPO', 'A2C']
-    model = ['PPO', 'A2C']
+    model = ['PPO']
     SINR = [5,10,15,20]
     total_timestep = 300000
     for mod in model:

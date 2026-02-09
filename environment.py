@@ -6,7 +6,7 @@ import gymnasium as gym
 from basestation import BS
 
 
-class SecCom_Env(gym.Env):
+class SecCom_Env:
     reset_counter = 0
     reward = 0
 
@@ -15,71 +15,65 @@ class SecCom_Env(gym.Env):
     sum_data_rate = 0
     eve_sum_data_rate = 0
 
-    def __init__(self, configuration):
+    def __init__(self, configuration, is_adversarial=False, fairness_mode="sum"):
         self.cfg = configuration
-        # create new BaseStation -> basestation init
+        self.is_adversarial = is_adversarial
+        self.fairness_mode = fairness_mode # 'sum', 'min_max', 'jain'
         self.antenna_array = self.cfg.default_antenna_array
         self.beamforming_matrices = self.cfg.default_beam_matrices
         self.basestation = BS(self.antenna_array, self.cfg)
         self.sum_data_rate = 0
-
-        # Observation space
-        self.observation_space = gym.spaces.Dict(
-            {
-                "user_field_response_vector": gym.spaces.Box(-50, 50, shape=(
-                self.cfg.M_users, (self.cfg.l_path_propagation * self.cfg.N_antennaElement) * 2), dtype=np.float64),
-                "user_security_rate": gym.spaces.Box(0, 20, shape=(self.cfg.M_users,), dtype=np.float64),
-            }
-        )
+        self.step_counter = 0
+        self.observation_shape = {
+            "user_field_response_vector": (self.cfg.M_users, (self.cfg.l_path_propagation * self.cfg.N_antennaElement) * 2),
+            "user_data_rate": (self.cfg.M_users,),
+        }
+        
+        self.action_dim = self.cfg.N_antennaElement + (self.cfg.Number_of_com_components * self.cfg.N_antennaElement)
 
         for user in self.basestation.usrList:
             user.update_attribute(self.antenna_array)
 
-        # Action space
-        """
-        Action space including:
-            N antenna element positions
-            beamforming matrix parameters = Number of com component * Number of antenna elements
-        """
-        self.action_space = gym.spaces.Box(low=-1, high=1, shape=(
-        (self.cfg.N_antennaElement + (self.cfg.Number_of_com_components * self.cfg.N_antennaElement)),),
-                                           dtype=np.float32)
-
     # Observation space update
     def _get_obs(self):
         all_field_response_vector = []
+        user_data_rates = []
         for i in range(self.cfg.M_users):
             all_field_response_vector.append(self.basestation.usrList[i].get_field_response_vector().reshape(
                 self.cfg.l_path_propagation * self.cfg.N_antennaElement, ))
+            user_data_rates.append(self.basestation.usrList[i].get_data_rate())
         
         # Convert complex vector to real-valued vector (real, imag)
         complex_vector = np.array(all_field_response_vector, dtype=np.complex128)
         all_field_response_vector = np.concatenate([np.real(complex_vector), np.imag(complex_vector)], axis=-1)
-        return ({
+        return {
             "user_field_response_vector": all_field_response_vector,
-            "user_security_rate": self.basestation.get_secretary_rate(),
-        })
+            "user_data_rate": np.array(user_data_rates),
+        }
 
-    # Get information for Monitor environment wrapper
+    # Get information for monitoring
     def _get_info(self):
+        user_data_rates = np.array([u.get_data_rate() for u in self.basestation.usrList])
         return {
             "antenna_array": self.antenna_array,
             "beamforming_matrices": self.beamforming_matrices,
-            "user_security_rate": self.basestation.get_secretary_rate(),
+            "user_data_rate": user_data_rates,
+            "user_security_rate": self.basestation.get_secretary_rate(), # Kept for record but not used in reward
             "sensing_sirn": self.basestation.sensing_target.get_SINR(),
             "model_reward": self.reward,
-            "beam_power": 1
+            "beam_power": self.beam_power
         }
 
-    def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
-        # We need the following line to seed self.np_random
-        super().reset(seed=seed)
+    def reset(self, seed=None):
+        if seed is not None:
+            np.random.seed(seed)
+            
         self.step_counter = 0
         self.reward = 0
-        # self.reset_counter += 1
         self.antenna_array = self.cfg.default_antenna_array
         self.beamforming_matrices = self.cfg.default_beam_matrices
         self.basestation = BS(self.antenna_array, self.cfg)
+        
         observation = self._get_obs()
         info = self._get_info()
 
@@ -92,34 +86,52 @@ class SecCom_Env(gym.Env):
         # Extract beamforming matrices
         self.beamforming_matrices = (action[self.cfg.N_antennaElement:] * self.cfg.beamforming_action_scaling).reshape(
             self.cfg.Number_of_com_components, self.cfg.N_antennaElement)
-        
-        # Update system model state
-        self.basestation.update_system(self.antenna_array, self.beamforming_matrices)
 
-        # Extract secretary rate
-        self.secret_rate = self.basestation.get_secretary_rate().sum()
+        self.basestation.update_system(self.antenna_array, self.beamforming_matrices)
+        self.sum_data_rate = sum([u.get_data_rate() for u in self.basestation.usrList])
 
         # Reward calculation
-        self.reward = 0
-        self.reward = self.reward + self.secret_rate
-        truncated = False
-        if (self.validating_actions(self.basestation.sensing_target.get_SINR())):
-            print("reward ", self.reward)
-            reward = self.reward
+        if self.is_adversarial:
+            sensing_sinr = self.basestation.sensing_target.get_SINR()
+            if self.validating_actions(sensing_sinr):
+                self.reward = 1.0 / (self.sum_data_rate + 0.1)
+            else:
+                self.reward = -10.0
+                
         else:
-            reward = 0
+            # NORMAL MODE
+            sensing_sinr = self.basestation.sensing_target.get_SINR()
+            if self.validating_actions(sensing_sinr):
+                if self.fairness_mode == "sum":
+                    self.reward = self.sum_data_rate
+                elif self.fairness_mode == "min_max":
+                    # Max-Min Fairness: Reward based on minimum user rate
+                    min_rate = min([u.get_data_rate() for u in self.basestation.usrList])
+                    self.reward = min_rate * self.cfg.M_users # Scale to be comparable
+                elif self.fairness_mode == "jain":
+                    # Jain's Fairness Index * Sum Rate
+                    rates = np.array([u.get_data_rate() for u in self.basestation.usrList])
+                    sum_rates = rates.sum()
+                    sum_sq_rates = (rates ** 2).sum()
+                    if sum_sq_rates == 0:
+                        jain_index = 0
+                    else:
+                        jain_index = (sum_rates ** 2) / (self.cfg.M_users * sum_sq_rates)
+                    self.reward = jain_index * sum_rates
+                else:
+                    self.reward = self.sum_data_rate
+            else:
+                self.reward = 0
+                
+        reward = self.reward
 
         # Terminate after 1 step ~ 1 step/episode
         terminated = True
+        truncated = False
+        self.step_counter += 1
 
-        # These parameters only for loggin purpose on tensorboard
+        # These parameters only for logging purpose
         self.beam_power = np.trace(np.dot(self.beamforming_matrices, np.conj(self.beamforming_matrices).T))
-        self.sum_data_rate = 0
-        for i in range(self.cfg.M_users):
-            self.sum_data_rate = self.sum_data_rate + self.basestation.usrList[i].get_data_rate()
-        self.eve_sum_data_rate = np.array(self.basestation.eva.EACH_users_data_rate).sum()
-
-        # Update observation and info
         observation = self._get_obs()
         info = self._get_info()
         return observation, reward, terminated, truncated, info

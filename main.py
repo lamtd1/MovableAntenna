@@ -1,155 +1,192 @@
-import gymnasium as gym
-
-from stable_baselines3 import PPO, A2C, DDPG
-
-from stable_baselines3.common.env_util import make_vec_env
-from stable_baselines3.common.monitor import Monitor
-from stable_baselines3.common.callbacks import EvalCallback, BaseCallback
-from stable_baselines3.common.noise import NormalActionNoise, OrnsteinUhlenbeckActionNoise
-
 import os
 import time
 import argparse
 import numpy as np
+import torch
+import csv
 
 from environment import SecCom_Env
+from ppo import PPOAgent, Memory
 from system_configuration import Config
 
 cfg = Config()
 
 # set up monitor log dir
-dir_monitor_log = "monitor_log/"
-dir_tensorboard_logs = f"logs/"
-file_name = "no_custom_name"
+dir_logs = "logs/"
 
 time_steps = 350000  # default time steps for all models
 
-class TensorboardCallBack(BaseCallback):
-    def __init__(self, verbose=1):
-        super(TensorboardCallBack, self).__init__(verbose)
-        self.beam_value = 0
-        self.secret_rate = 0
-        self.users_data_rate = 0
+def flatten_obs(obs):
+    # Flatten both field response vector and data rate
+    field_vec = obs["user_field_response_vector"].flatten()
+    data_rate = obs["user_data_rate"].flatten()
+    return np.concatenate([field_vec, data_rate])
 
-    # def _on_training_start(self) -> None:
+def run_manual_ppo(args, model_custom_parameters):
+    # Pass configuration flags to Environment
+    env = SecCom_Env(cfg, is_adversarial=args.invert_reward, fairness_mode=args.fairness)
+    
+    # Calculate flattened observation dimension
+    obs_shape = env.observation_shape["user_field_response_vector"]
+    obs_dim = (obs_shape[0] * obs_shape[1]) + env.observation_shape["user_data_rate"][0]
+    action_dim = env.action_dim
+    
+    if not os.path.exists(dir_logs):
+        os.makedirs(dir_logs)
+    
+    log_file_path = os.path.join(dir_logs, f"PPO_manual_{int(time.time())}{model_custom_parameters}.csv")
+    csv_file = open(log_file_path, mode='w', newline='')
+    csv_writer = csv.writer(csv_file)
+    
+    # Prepare header (Focused on maximizing sum_data_rate)
+    header = ['step', 'beam_power', 'sum_data_rate', 'model_reward']
+    for i in range(cfg.M_users):
+        header.append(f'data_rate_user_{i}')
+    csv_writer.writerow(header)
+    
+    agent = PPOAgent(obs_dim, action_dim, lr=0.0007)
+    memory = Memory()
+    
+    state, info = env.reset()
+    state = flatten_obs(state)
+    
+    total_steps = 0
+    update_timestep = 1000 # Update policy every 1000 steps
+    
+    while total_steps < time_steps:
+        action, action_logprob, value = agent.select_action(state)
+        
+        next_state, reward, terminated, truncated, info = env.step(action)
+            
+        next_state = flatten_obs(next_state)
+        done = terminated or truncated
+        
+        memory.states.append(state)
+        memory.actions.append(action)
+        memory.logprobs.append(action_logprob)
+        memory.rewards.append(reward)
+        memory.is_terminals.append(done)
+        memory.values.append(value)
+        
+        state = next_state
+        total_steps += 1
+        
+        # Logging
+        if total_steps % 10 == 0:
+            user_data_rates = info["user_data_rate"]
+            sum_data_rate = user_data_rates.sum()
+            
+            row = [
+                total_steps, 
+                info["beam_power"], 
+                sum_data_rate, 
+                reward
+            ]
+            row.extend(user_data_rates.tolist())
+            csv_writer.writerow(row)
+            csv_file.flush()
 
-    # def _on_rollout_start(self) -> None:
+        if done:
+            state, info = env.reset()
+            state = flatten_obs(state)
+            
+        # Update PPO agent
+        if total_steps % update_timestep == 0:
+            agent.update(memory)
+            memory.clear()
+            print(f"Step: {total_steps}/{time_steps} - Policy Updated")
+            
+        # Save model every 50000 steps
+        if total_steps % 50000 == 0:
+            model_dir = "models/"
+            if not os.path.exists(model_dir):
+                os.makedirs(model_dir)
+            save_path = os.path.join(model_dir, f"PPO_{int(time.time())}_{total_steps}.pth")
+            agent.save(save_path)
 
-    def _on_step(self) -> bool:
-        self.beam_value = self.training_env.get_attr("beam_power")[0]
-        self.secret_rate = self.training_env.get_attr("secret_rate")[0]
-        self.users_data_rate = self.training_env.get_attr("sum_data_rate")[0]
-        self.eva_sum_data_rate = self.training_env.get_attr("eve_sum_data_rate")[0]
-        self.logger.record("custom/beam_power", self.beam_value)
-        self.logger.record("custom/secret_rate", self.secret_rate)
-        self.logger.record("custom/sum_data_rate", self.users_data_rate)
-        self.logger.record("custom/eva_sum_data_rate", self.eva_sum_data_rate)
-        return True
+    csv_file.close()
+    
+    # Save final model
+    model_dir = "models/"
+    if not os.path.exists(model_dir):
+        os.makedirs(model_dir)
+    final_save_path = os.path.join(model_dir, f"PPO_final_{int(time.time())}.pth")
+    if args.invert_reward:
+        final_save_path = os.path.join(model_dir, f"PPO_EVIL_final_{int(time.time())}.pth")
+        
+    agent.save(final_save_path)
+    print(f"Training finished. Log saved to {log_file_path}")
+    print(f"Final model saved to {final_save_path}")
 
-    # def _on_rollout_end(self) -> None:
-    #     return super()._on_rollout_end()
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-m', '--model', default='PPO')
+    parser.add_argument('-inv', '--invert_reward', action='store_true', help='Invert reward to train an Evil Agent')
+    parser.add_argument('-Mu', '--num_users')
+    parser.add_argument('-N', '--antenna')
+    parser.add_argument('-Ms', '--min_sensing')
+    parser.add_argument('-po', '--max_txPo')
+    parser.add_argument('-f', "--filename")
+    parser.add_argument('-t', "--total_timestep")
+    parser.add_argument('-fair', "--fairness", default="sum", help="Fairness mode: sum (default), min_max, jain")
 
-    # def _on_training_end(self) -> None:
+    parser.add_argument('-bs', "--beam_upscale")
+    parser.add_argument('-Lp', "--L_path_propagation")
+    parser.add_argument('-As', "--atenna_size")
+    args = parser.parse_args()
 
-parser = argparse.ArgumentParser()
-parser.add_argument('-m', '--model')
-parser.add_argument('-Mu', '--num_users')
-parser.add_argument('-N', '--antenna')
-parser.add_argument('-Ms', '--min_sensing')
-parser.add_argument('-po', '--max_txPo')
-parser.add_argument('-f', "--filename")
-parser.add_argument('-t', "--total_timestep")
+    model_custom_parameters = f"_{args.model}"
 
-# custom model parametes
-parser.add_argument('-bs', "--beam_upscale")
-parser.add_argument('-Lp', "--L_path_propagation")
-parser.add_argument('-As', "--atenna_size")
-args = parser.parse_args()
-model_custom_parameters = f"_{args.model}"
+    if args.antenna is not None:
+        cfg.N_antennaElement = int(args.antenna)
+        print("changed antenna element to: ", cfg.N_antennaElement)
+        model_custom_parameters = model_custom_parameters+f"_N_atn_{cfg.N_antennaElement}"
 
+    if args.num_users is not None:
+        cfg.M_users = int(args.num_users)
+        print("changed number of users to: ", cfg.M_users)
+        model_custom_parameters = model_custom_parameters+f"_M_usrs_{cfg.M_users}"
 
-def run_model(model_name):
-    envPPO = SecCom_Env(cfg)
-    env = Monitor(envPPO, info_keywords=("model_reward","user_security_rate"), filename=dir_monitor_log+model_name+f"_{int(time.time())}"+file_name+model_custom_parameters)
-    log_dir = dir_tensorboard_logs + model_name + f"_{int(time.time())}" + model_custom_parameters
-    if not os.path.exists(log_dir):
-        os.makedirs(log_dir)
-    env.reset()
-    model = A2C("MultiInputPolicy", env, verbose=1, tensorboard_log=log_dir, n_steps=5)
-    match args.model:
-        case 'PPO':
-            model = PPO("MultiInputPolicy", env, verbose=1, tensorboard_log=log_dir, clip_range=0.4,
-                        learning_rate=0.0007,
-                        gae_lambda=1, n_steps=1000)
+    if args.min_sensing is not None:
+        cfg.sensing_SINR_min = float(args.min_sensing)
+        print("changed min sensing SINR to: ", cfg.sensing_SINR_min)
+        model_custom_parameters = model_custom_parameters+f"_senSINR_min_{cfg.sensing_SINR_min}"
 
-        # This case had been defined as default case
-        # case 'A2C':
-        #     model = A2C("MultiInputPolicy", env, verbose=1, tensorboard_log=log_dir, n_steps=5)
+    if args.max_txPo is not None:
+        cfg.P0_basestation_power = float(args.max_txPo)
+        print("changed max basestation power to: ", cfg.P0_basestation_power)
+        model_custom_parameters = model_custom_parameters+f"_bs_power_{cfg.P0_basestation_power}"
 
-        case 'DDPG':
-            n_actions = env.action_space.shape[-1]
-            action_noise = NormalActionNoise(mean=np.zeros(n_actions), sigma=0.1 * np.ones(n_actions))
-            model = DDPG("MultiInputPolicy", env, verbose=1, tensorboard_log=log_dir, action_noise=action_noise,
-                         learning_starts=8500, batch_size=256)
+    if args.total_timestep is not None:
+        time_steps = int(args.total_timestep)
+        print("total time step running is: ", time_steps)
 
-    Total_TIMESTEPS = time_steps
-    custom_tensor_callback = TensorboardCallBack()
-    model.learn(total_timesteps=Total_TIMESTEPS, reset_num_timesteps=True, tb_log_name="PPO",
-                callback=custom_tensor_callback)
-    del model
-    env.close()
-    return 0
+    if args.beam_upscale is not None:
+        cfg.beamforming_action_scaling = float(args.beam_upscale)
+        print("Beam upscaler changes to: ", cfg.beamforming_action_scaling)
+        model_custom_parameters = model_custom_parameters+f"_beam_upscaler_{cfg.beamforming_action_scaling}"
 
+    if args.L_path_propagation is not None:
+        cfg.l_path_propagation = int(args.L_path_propagation)
+        print("Number of Path propagation changes to: ", cfg.l_path_propagation)
+        model_custom_parameters = model_custom_parameters+f"_L_path_propagation_{cfg.l_path_propagation}"
 
-if args.antenna is not None:
-    cfg.N_antennaElement = int(args.antenna)
-    print("changed antenna element to: ", cfg.N_antennaElement)
-    model_custom_parameters = model_custom_parameters+f"_N_atn_{cfg.N_antennaElement}"
+    if args.atenna_size is not None:
+        cfg.MA_size = int(args.atenna_size)
+        print("Size of Movable antenna: ", cfg.MA_size)
+        model_custom_parameters = model_custom_parameters+f"_movable_antenna_size_{cfg.MA_size}"
 
-if args.num_users is not None:
-    cfg.M_users = int(args.num_users)
-    print("changed number of users to: ", cfg.M_users)
-    model_custom_parameters = model_custom_parameters+f"_M_usrs_{cfg.M_users}"
+    model_custom_parameters = model_custom_parameters+f"_timeStep_{time_steps}"
 
-if args.min_sensing is not None:
-    cfg.sensing_SINR_min = float(args.min_sensing)
-    print("changed min sensing SINR to: ", cfg.sensing_SINR_min)
-    model_custom_parameters = model_custom_parameters+f"_senSINR_min_{cfg.sensing_SINR_min}"
+    if args.invert_reward:
+        print("WARNING: ADVERSARIAL MODE. REWARDS INVERTED.")
+        model_custom_parameters += "_INVERTED"
 
-if args.max_txPo is not None:
-    cfg.P0_basestation_power = float(args.max_txPo)
-    print("changed max basestation power to: ", cfg.P0_basestation_power)
-    model_custom_parameters = model_custom_parameters+f"_bs_power_{cfg.P0_basestation_power}"
+    cfg.init_unstatic_value()
 
-if args.filename is not None:
-    file_name = args.filename
-print("saving directory is: ", dir_monitor_log+file_name)
-
-if args.total_timestep is not None:
-    time_steps = int(args.total_timestep)
-    print("total time step running is: ", time_steps)
-
-if args.beam_upscale is not None:
-    cfg.beamforming_action_scaling = float(args.beam_upscale)
-    print("Beam upscaler changes to: ", cfg.beamforming_action_scaling)
-    model_custom_parameters = model_custom_parameters+f"_beam_upscaler_{cfg.beamforming_action_scaling}"
-
-if args.L_path_propagation is not None:
-    cfg.l_path_propagation = int(args.L_path_propagation)
-    print("Number of Path propagation changes to: ", cfg.l_path_propagation)
-    model_custom_parameters = model_custom_parameters+f"_L_path_propagation_{cfg.l_path_propagation}"
-
-if args.atenna_size is not None:
-    cfg.MA_size = int(args.atenna_size)
-    print("Size of Movable antenna: ", cfg.MA_size)
-    model_custom_parameters = model_custom_parameters+f"_movable_antenna_size_{cfg.MA_size}"
-
-model_custom_parameters = model_custom_parameters+f"_timeStep_{time_steps}"
-cfg.init_unstatic_value()
-
-if args.model is None:
-    print("No model name found!")
-else:
-    run_model(args.model)
+    if args.model == "PPO":
+        run_manual_ppo(args, model_custom_parameters)
+    else:
+        print(f"Model {args.model} not supported in manual mode yet. Only PPO is implemented.")
 
 

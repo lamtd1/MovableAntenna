@@ -1,4 +1,6 @@
 logs
-model
+models
 monitor_log
 __pycache__
+plot*
+Ta*
